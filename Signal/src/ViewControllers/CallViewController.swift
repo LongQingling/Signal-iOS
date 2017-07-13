@@ -19,8 +19,8 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
 
     // MARK: Properties
 
-    var thread: TSContactThread!
-    var call: SignalCall!
+    let thread: TSContactThread
+    let call: SignalCall
     var hasDismissed = false
 
     // MARK: Views
@@ -88,16 +88,21 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
 
     // MARK: Initializers
 
+    @available(*, unavailable, message: "use init(call:) constructor instead.")
     required init?(coder aDecoder: NSCoder) {
         contactsManager = Environment.getCurrent().contactsManager
         callUIAdapter = Environment.getCurrent().callUIAdapter
+        self.call = SignalCall.outgoingCall(localId: UUID(), remotePhoneNumber: "+1234567890")
+        self.thread = TSContactThread.getOrCreateThread(contactId: call.remotePhoneNumber)
         super.init(coder: aDecoder)
         observeNotifications()
     }
 
-    required init() {
+    required init(call: SignalCall) {
         contactsManager = Environment.getCurrent().contactsManager
         callUIAdapter = Environment.getCurrent().callUIAdapter
+        self.call = call
+        self.thread = TSContactThread.getOrCreateThread(contactId: call.remotePhoneNumber)
         super.init(nibName: nil, bundle: nil)
         observeNotifications()
     }
@@ -137,12 +142,6 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        guard let thread = self.thread else {
-            Logger.error("\(TAG) tried to show call call without specifying thread.")
-            showCallFailed(error: OWSErrorMakeAssertionError())
-            return
-        }
-
         createViews()
 
         contactNameLabel.text = contactsManager.displayName(forPhoneIdentifier: thread.contactIdentifier())
@@ -153,7 +152,6 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
             strongSelf.updateAvatarImage()
         }
 
-        assert(call != nil)
         // Subscribe for future call updates
         call.addObserverAndSyncState(observer: self)
 
@@ -588,30 +586,26 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
         case .answering:
             return NSLocalizedString("IN_CALL_SECURING", comment: "Call setup status label")
         case .connected:
-            if let call = self.call {
-                let callDuration = call.connectionDuration()
-                let callDurationDate = Date(timeIntervalSinceReferenceDate:callDuration)
-                if dateFormatter == nil {
-                    dateFormatter = DateFormatter()
-                    dateFormatter!.dateFormat = "HH:mm:ss"
-                    dateFormatter!.timeZone = TimeZone(identifier:"UTC")!
-                }
-                var formattedDate = dateFormatter!.string(from: callDurationDate)
-                if formattedDate.hasPrefix("00:") {
-                    // Don't show the "hours" portion of the date format unless the 
-                    // call duration is at least 1 hour.
-                    formattedDate = formattedDate.substring(from: formattedDate.index(formattedDate.startIndex, offsetBy: 3))
-                } else {
-                    // If showing the "hours" portion of the date format, strip any leading
-                    // zeroes.
-                    if formattedDate.hasPrefix("0") {
-                        formattedDate = formattedDate.substring(from: formattedDate.index(formattedDate.startIndex, offsetBy: 1))
-                    }
-                }
-                return formattedDate
-            } else {
-                return NSLocalizedString("IN_CALL_TALKING", comment: "Call setup status label")
+            let callDuration = call.connectionDuration()
+            let callDurationDate = Date(timeIntervalSinceReferenceDate:callDuration)
+            if dateFormatter == nil {
+                dateFormatter = DateFormatter()
+                dateFormatter!.dateFormat = "HH:mm:ss"
+                dateFormatter!.timeZone = TimeZone(identifier:"UTC")!
             }
+            var formattedDate = dateFormatter!.string(from: callDurationDate)
+            if formattedDate.hasPrefix("00:") {
+                // Don't show the "hours" portion of the date format unless the
+                // call duration is at least 1 hour.
+                formattedDate = formattedDate.substring(from: formattedDate.index(formattedDate.startIndex, offsetBy: 3))
+            } else {
+                // If showing the "hours" portion of the date format, strip any leading
+                // zeroes.
+                if formattedDate.hasPrefix("0") {
+                    formattedDate = formattedDate.substring(from: formattedDate.index(formattedDate.startIndex, offsetBy: 1))
+                }
+            }
+            return formattedDate
         case .remoteBusy:
             return NSLocalizedString("END_CALL_RESPONDER_IS_BUSY", comment: "Call setup status label")
         case .localFailure:
@@ -723,11 +717,8 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
      */
     func didPressHangup(sender: UIButton) {
         Logger.info("\(TAG) called \(#function)")
-        if let call = self.call {
-            callUIAdapter.localHangupCall(call)
-        } else {
-            Logger.warn("\(TAG) hung up, but call was unexpectedly nil")
-        }
+
+        callUIAdapter.localHangupCall(call)
 
         dismissIfPossible(shouldDelay:false)
     }
@@ -735,21 +726,15 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
     func didPressMute(sender muteButton: UIButton) {
         Logger.info("\(TAG) called \(#function)")
         muteButton.isSelected = !muteButton.isSelected
-        if let call = self.call {
-            callUIAdapter.setIsMuted(call: call, isMuted: muteButton.isSelected)
-        } else {
-            Logger.warn("\(TAG) pressed mute, but call was unexpectedly nil")
-        }
+
+        callUIAdapter.setIsMuted(call: call, isMuted: muteButton.isSelected)
     }
 
     func didPressSpeakerphone(sender speakerphoneButton: UIButton) {
         Logger.info("\(TAG) called \(#function)")
         speakerphoneButton.isSelected = !speakerphoneButton.isSelected
-        if let call = self.call {
-            callUIAdapter.setIsSpeakerphoneEnabled(call: call, isEnabled: speakerphoneButton.isSelected)
-        } else {
-            Logger.warn("\(TAG) pressed mute, but call was unexpectedly nil")
-        }
+
+        callUIAdapter.setIsSpeakerphoneEnabled(call: call, isEnabled: speakerphoneButton.isSelected)
     }
 
     func didPressTextMessage(sender speakerphoneButton: UIButton) {
@@ -761,28 +746,14 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
     func didPressAnswerCall(sender: UIButton) {
         Logger.info("\(TAG) called \(#function)")
 
-        guard let call = self.call else {
-            Logger.error("\(TAG) call was unexpectedly nil. Terminating call.")
-
-            let text = String(format: CallStrings.callStatusFormat,
-                              NSLocalizedString("END_CALL_UNCATEGORIZED_FAILURE", comment: "Call setup status label"))
-            self.callStatusLabel.text = text
-
-            dismissIfPossible(shouldDelay:true)
-            return
-        }
-
         callUIAdapter.answerCall(call)
     }
 
     func didPressVideo(sender: UIButton) {
         Logger.info("\(TAG) called \(#function)")
         let hasLocalVideo = !sender.isSelected
-        if let call = self.call {
-            callUIAdapter.setHasLocalVideo(call: call, hasLocalVideo: hasLocalVideo)
-        } else {
-            Logger.warn("\(TAG) pressed video, but call was unexpectedly nil")
-        }
+
+        callUIAdapter.setHasLocalVideo(call: call, hasLocalVideo: hasLocalVideo)
     }
 
     /**
@@ -791,11 +762,7 @@ class CallViewController: UIViewController, CallObserver, CallServiceObserver, R
     func didPressDeclineCall(sender: UIButton) {
         Logger.info("\(TAG) called \(#function)")
 
-        if let call = self.call {
-            callUIAdapter.declineCall(call)
-        } else {
-            Logger.warn("\(TAG) denied call, but call was unexpectedly nil")
-        }
+        callUIAdapter.declineCall(call)
 
         dismissIfPossible(shouldDelay:false)
     }
